@@ -15,53 +15,59 @@ namespace RL.Backend.Commands.Handlers.Procedure
         {
             _context = context;
         }
-        public async Task<ApiResponse<Unit>> Handle(DeleteUsersFromProcedureCommand request, CancellationToken cancellationToken)
+    public async Task<ApiResponse<Unit>> Handle(DeleteUsersFromProcedureCommand request, CancellationToken cancellationToken)
+    {
+    try
+    {
+
+        if (request.PlanId < 1)
+            return ApiResponse<Unit>.Fail(new BadRequestException("Invalid PlanId"));
+        if (request.ProcedureId < 1)
+            return ApiResponse<Unit>.Fail(new BadRequestException("Invalid ProcedureId"));
+
+
+        var plan = await _context.Plans
+            .Include(p => p.PlanProcedureUsers)
+            .FirstOrDefaultAsync(p => p.PlanId == request.PlanId, cancellationToken);
+        if (plan is null)
+            return ApiResponse<Unit>.Fail(new NotFoundException($"PlanId: {request.PlanId} not found"));
+
+        var procedure = await _context.Procedures
+            .Include(p => p.PlanProcedureUsers)
+            .FirstOrDefaultAsync(p => p.ProcedureId == request.ProcedureId, cancellationToken);
+        if (procedure is null)
+            return ApiResponse<Unit>.Fail(new NotFoundException($"ProcedureId: {request.ProcedureId} not found"));
+
+
+        if (request.UserIds == null || !request.UserIds.Any())
+            return ApiResponse<Unit>.Fail(new BadRequestException("No UserIds provided"));
+
+        var validUserIds = await _context.Users
+            .Select(u => u.UserId)
+            .ToListAsync(cancellationToken);
+        if (!request.UserIds.All(id => validUserIds.Contains(id)))
+            return ApiResponse<Unit>.Fail(new BadRequestException("One or more UserIds are invalid"));
+
+        // Filtering users to delete
+        var usersToRemove = procedure.PlanProcedureUsers
+            .Where(ppu => ppu.PlanId == request.PlanId 
+                          && ppu.ProcedureId == request.ProcedureId 
+                          && request.UserIds.Contains(ppu.UserId))
+            .ToList();
+
+        if (usersToRemove.Any())
         {
-            try
-            {
-                //Validate request
-                if (request.PlanId < 1)
-                    return ApiResponse<Unit>.Fail(new BadRequestException("Invalid PlanId"));
-                if (request.ProcedureId < 1)
-                    return ApiResponse<Unit>.Fail(new BadRequestException("Invalid ProcedureId"));
-
-                var plan = await _context.Plans
-                .Include(p => p.PlanProcedureUsers)
-                .FirstOrDefaultAsync(p => p.PlanId == request.PlanId);
-                if (plan is null)
-                    return ApiResponse<Unit>.Fail(new NotFoundException($"PlanId: {request.PlanId} not found"));
-
-                var procedures = await _context.Procedures
-                    .Include(p => p.PlanProcedureUsers)
-                    .FirstOrDefaultAsync(p => p.ProcedureId == request.ProcedureId);
-                if (procedures is null)
-                    return ApiResponse<Unit>.Fail(new NotFoundException($"ProcedureId: {request.ProcedureId} not found"));
-
-                if (request.UserIds is null || request.UserIds.Count() < 1)
-                    procedures.PlanProcedureUsers.Clear();
-                else
-                {
-                    var validIds = await _context.Users.Select(u => u.UserId).ToListAsync();
-                    bool isValidIds = request.UserIds.All(x => validIds.Contains(x));
-                    if (!isValidIds)
-                        return ApiResponse<Unit>.Fail(new NotFoundException($"Invalid UserIds"));
-
-                    var userIdsDoNotExist = procedures.PlanProcedureUsers.Where(ppu => ppu.PlanId == request.PlanId && ppu.ProcedureId == request.ProcedureId).Select(ppu => ppu.UserId).Except(request.UserIds);
-                    if (userIdsDoNotExist.Any())
-                    {
-                        var removedUsers = procedures.PlanProcedureUsers.Where(ppu => ppu.PlanId == request.PlanId && ppu.ProcedureId == request.ProcedureId && userIdsDoNotExist.Contains(ppu.UserId));
-                        if (removedUsers.Any())
-                            _context.PlanProcedureUsers.RemoveRange(removedUsers);
-                    }
-                }
-                await _context.SaveChangesAsync();
-
-                return ApiResponse<Unit>.Succeed(new Unit());
-            }
-            catch (Exception e)
-            {
-                return ApiResponse<Unit>.Fail(e);
-            }
+            _context.PlanProcedureUsers.RemoveRange(usersToRemove);
         }
+
+        await _context.SaveChangesAsync(cancellationToken);
+        return ApiResponse<Unit>.Succeed(Unit.Value);
+    }
+    catch (Exception ex)
+    {
+        return ApiResponse<Unit>.Fail(ex);
+    }
+}
+
     }
 }
